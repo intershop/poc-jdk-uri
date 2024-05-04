@@ -1,126 +1,93 @@
 # Introduction
 
-This project provides a native JDBC based object relational mapping (ORM) to java.
+<b>The content of this project is not production ready</b>
 
-ORM2 - Second generation of ORM engine using jakarta.persistence annotations to declare database content.
+* The first part tries an explanation, why it's difficult to provide a correct encoded URI with JDK java.net classes.
+* The second part tries to provide a proposal for easier usage with a URI builder API.
 
-# Usage #
 
-## Table Declaration
+## Expected correct URI
 
-Declare a table with standard java persistence API annotations.
-<pre>
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.OneToMany;
-import jakarta.persistence.Table;
-
-@Entity // is an entity because it has an @Id
-@Table(name = "PersistExample")
-public class PersistExample
-{
-    @Column(name = "uuid", nullable = false, length = 36)
-    @Id
-    private String uuid;
-    @Column(name = "name", nullable = false, length = 255)
-    private String name;
-}
-</pre>
-
-## Caching ##
-
-The ORM engine supports caching of persistent objects. Therefore, objects must be "clonable" to provide different
-instances for different transactional contexts.
-* Variant A: `implement java.io.Serializable`.
-* Variant B: `extends ORMClonable<TableClass>`, a type safe cloning. Gives the persistent class more control, what needs to copied.
-
-The current cache implementation provides a cache for each persistent class. All caches using WeakReferences, so GC can remove objects as well.
-
-# Feature Description #
-
-## Standard SQL and DDL functionality ##
-
-* create/drop tables (columns and primary key)
-* insert/update/delete single rows
-* select row by identifier
-* select all
-* simple data type support for String, Integer, Date, BigDecimal
-
-## Contexts of ORM2 Engine ##
-
-The ORM engine, itself, has no explicit context, but can:
-* register persistent object classes
-* provide data source context with `datasourceContext = ORM2Engine.prepareConnection(url)`.
-
-## Data source context ##
-The data source context represents the external database. A data source context:
-* provides new connections to the database `connectionContext = datasourceContext.connect()`
-* caches persistent objects independent from connections
-
-## Connection context ##
-After connecting the database a connection context is provided. This context: 
-* provides a simple CRUD Repository (Data Access Object) to manipulate persistent objects 
-  <pre>
-  dao = connectionContext.getDao(PersistExample.class)
-    PersistExample po = new PersistExample()
-    po.set(...);
-  dao.insert(po);
-    po.set(...)
-  dao.update(po);
-  dao.delete(po);
-  </pre>
-* provides extended data access objects via interface declaration of `findBy` methods.
-  <pre>
-  @ExtendsDao(PersistExample.class)
-  public interface ExampleDao extends ORMDao&lt;PersistExample, String>
-  {
-    @UseField("name")
-    Optional&lt;TableChild> findByName(String name);
-    @UseField("domainid")
-    List&lt;TableChild> findByDomainID(String domainID);
-  }
-  </pre>
-
-## Performance Improvements ##
-
-* local ORM cache for shared state (via cloneMe() and serializable)
-
-## Open Features ##
-
-* Relations between tables
-* Foreign key definition
-* Index definition
-* Enum type mapping
-* Embedded type mapping (like Currency, Money)
-* Composite primary keys
-* Native Query
-* Transactional begin/commit/rollback (TransactionalContext)
-* More Datatypes
-* support external cache implementations like: redis, https://hazelcast.com/use-cases/microservices/
-* support cache synchronization
-
-# Environment Variables
-
-## Service - Environment Variables
-
-| Variable | Description | Example    |
-|----------|------------|------------|
-| DATASOURCE_URL | database connection string | jdbc:sqlserver://127.0.0.1:1433;database=adb;user=auser;password=secret |
+For the given customer REST API endpoint:
+`https://servername/rest/customers/<customer-id>`
+I would expect the following encoded URI.
 
 <pre>
-git clone git@ssh.dev.azure.com:v3/intershop-com/Products/poc-orm2
+EXPECTED_URI_PATH.put("2024-1234", "https://servername/rest/customers/2024-1234");
+EXPECTED_URI_PATH.put("2024/1234", "https://servername/rest/customers/2024%2F1234");
+EXPECTED_URI_PATH.put("2024 1234", "https://servername/rest/customers/2024%201234");
+EXPECTED_URI_PATH.put("2024+1234", "https://servername/rest/customers/2024+1234");
 </pre>
 
-# Project Structure
+## Correct URI Encoding with java.net?
 
-| folder      | description                                       |
-|-------------|---------------------------------------------------|
-| gradle      | Contains the gradle wrapper for the buils process |
-| orm2-engine | ORM engine                                        |
+### Using java.net.URI
 
-# Gradle tasks
+The test class "URITest" shows that the path elements are encoded, but the slash '/' not.
+What is to do, if path elements containing slashes like "customer-numbers". 
+Patterns with slashes are common. So I could have the customer number "2024/1234" at my local town gas dealer.
 
-| Task | Description |
-|--------|------------|
-| test | Execute junit test for all packages |
+<pre>
+URI.create("https://servername/rest").resolve(URI.create("/customers/" + customerID));
+</pre>
+
+This breaks:
+<pre>
+EXPECTED_URI_PATH.put("2024/1234", "https://servername/rest/customers/2024%2F1234");
+</pre>
+because the result is `https://servername/rest/customers/2024/1234` that is a complete different endpoint.
+
+### Using java.net.URLEncode#encode
+
+The test class URLEncodeTest shows the common solution to encode path elements with URLEncode#encode.
+That leads to '+' sign in the path of the URL, which is not RFC conform.
+The documentation of URLEncode#encode clearly defines, that the method is valid for the query part.
+<pre>
+Translates a string into application/ x-www-form-urlencoded
+format using a specific Charset.
+</pre>
+
+<pre>
+URI.create("https://servername/rest/customers/" + URLEncode.encode(customerID));
+</pre>
+
+This breaks:
+<pre>
+EXPECTED_URI_PATH.put("2024 1234", "https://servername/rest/customers/2024%201234");
+</pre>
+because the result is `https://servername/rest/customers/2024+1234` that could be another customer.
+
+## Workaround with java.net
+
+URLEncode.encode doing it well, except the '+' sign encoding. And this method is available in other languages in a similar way (e.g. typescript)
+<pre>
+URLEncoder.encode(customerID.replaceAll("\\+", "%2B"), StandardCharsets.UTF_8)
+  .replaceAll("\\+", "%20").replaceAll("%252B", "+");
+</pre>
+
+# Proposal for URIBuilder API
+
+Personally, I would prefer a builder pattern, where the attributes are declarative assigned.
+
+<pre>
+var customerURIBuilder = URIBuilder.createURL()
+                            .scheme(SCHEME)
+                            .server(SERVER)
+                            .pathElements("rest", "customers", "2024/1234");
+URI uri = customerURIBuilder.build();
+</pre>
+
+The test class `URIBuilderTest` contains also example for relative URLs.
+
+<pre>
+var relativeAddress = URIBuilder.createRelativeURL()
+                            .pathElements("addresses", "shipping address")
+                            .build();
+</pre>
+
+Combining both
+<pre>
+URI addressURI = customerURIBuilder.pathElements(relativeAddress.getPathElements()).build();
+</pre>
+
+The proposal is incomplete and should only explain the idea.
