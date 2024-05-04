@@ -1,0 +1,5 @@
+rootProject.name = 'jdk-uri-encoding'
+
+include 'versions'
+include 'versions-test'
+include 'jdk-uri-encoding'

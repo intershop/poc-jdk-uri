@@ -1,0 +1,23 @@
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+
+# ide backups
+*~
+*.bak
+*.log
+
+# local configuration files
+.env
+.envrc
+
+# compiled output
+/.gradle
+
+# IDEs and editors
+**/bin
+**/build
+**/.idea
+**/.project
+**/.classpath
+**/*.launch
+**/.settings/
+**/.vscode/*
